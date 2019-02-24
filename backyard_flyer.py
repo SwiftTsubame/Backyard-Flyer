@@ -3,6 +3,7 @@ import time
 from enum import Enum
 
 import numpy as np
+import visdom
 
 from udacidrone import Drone
 from udacidrone.connection import MavlinkConnection, WebSocketConnection  # noqa: F401
@@ -29,11 +30,51 @@ class BackyardFlyer(Drone):
 
         # initial state
         self.flight_state = States.MANUAL
+        # default opens up to http://localhost:8097
+        self.v = visdom.Visdom()
+        assert self.v.check_connection()
+
+        # Plot NE
+        ne = np.array([self.local_position[0], self.local_position[1]]).reshape(1, -1)
+        self.ne_last_100 = ne
+        self.ne_plot = self.v.scatter(ne, opts=dict(
+            title="Local position (north, east)",
+            xlabel='North',
+            ylabel='East'
+        ))
+
+        # Plot D
+        d = np.array([self.local_position[2]])
+        self.d_last_100 = d
+        self.t = 0
+        self.d_plot = self.v.line(d, X=np.array([self.t]), opts=dict(
+            title="Altitude (meters)",
+            xlabel='Timestep',
+            ylabel='Down'
+        ))
 
         # Register all your callbacks here
         self.register_callback(MsgID.LOCAL_POSITION, self.local_position_callback)
         self.register_callback(MsgID.LOCAL_VELOCITY, self.velocity_callback)
         self.register_callback(MsgID.STATE, self.state_callback)
+        self.register_callback(MsgID.LOCAL_POSITION, self.update_ne_plot)
+        self.register_callback(MsgID.LOCAL_POSITION, self.update_d_plot)
+
+    def update_ne_plot(self):
+        ne = np.array([self.local_position[0], self.local_position[1]]).reshape(1, -1)
+        self.ne_last_100 = np.concatenate((self.ne_last_100, ne), axis=0)
+        if len(self.ne_last_100) > 100:
+            self.ne_last_100 = np.delete(self.ne_last_100, 0, axis=0)
+        self.v.scatter(self.ne_last_100, win=self.ne_plot, update='replace')
+
+    def update_d_plot(self):
+        d = np.array([self.local_position[2]])
+        self.d_last_100 = np.append(self.d_last_100, d)
+        if len(self.d_last_100) > 100:
+            self.d_last_100 = np.delete(self.d_last_100, 0)
+        # update timestep
+        self.t += 1
+        self.v.line(self.d_last_100, X=np.linspace(self.t-len(self.d_last_100), self.t, len(self.d_last_100)), win=self.d_plot, update='replace')
 
     def local_position_callback(self):
         if self.flight_state == States.TAKEOFF:
